@@ -33,11 +33,6 @@ from urllib3.util.retry import Retry
 INTRON_UPLOAD_URL = "https://infer.voice.intron.io/file/v1/upload"
 INTRON_STATUS_URL_TEMPLATE = "https://infer.voice.intron.io/file/v1/status/{file_id}"
 
-# API constraints
-MAX_FILE_SIZE_MB = 100
-MAX_AUDIO_DURATION_SECONDS = 600  # 10 minutes
-API_RATE_LIMIT_PER_MINUTE = 30
-
 # Polling configuration
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_MAX_WAIT_SECONDS = 600
@@ -98,11 +93,7 @@ def parse_s3_uri(uri: str) -> Tuple[str, str]:
     """
     if not uri.startswith("s3://"):
         raise ValueError(f"Invalid S3 URI format: {uri}")
-
-    uri_without_protocol = uri[5:]
-    bucket, key = uri_without_protocol.split("/", 1)
-
-    return bucket, key
+    return uri[5:].split("/", 1)
 
 
 def download_from_s3(uri: str, destination_path: Path) -> Path:
