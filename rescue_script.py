@@ -282,12 +282,12 @@ def upload_to_intron(
         FileNotFoundError: If file does not exist
     """
     with open(file_path, "rb") as audio_file:
-        files = {"audio_file_blob": (os.path.basename(file_path), audio_file)}
-
-        headers = {"Authorization": f"Bearer {api_key}"}
-
         response = session.post(
-            INTRON_UPLOAD_URL, data=payload, files=files, headers=headers, timeout=300
+            INTRON_UPLOAD_URL,
+            data=payload,
+            files={"audio_file_blob": (os.path.basename(file_path), audio_file)},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=300,
         )
         response.raise_for_status()
 
@@ -466,7 +466,11 @@ def upload_files_to_intron(
 
             payload = build_upload_payload(args, file_info["local_path"])
             future = executor.submit(
-                upload_to_intron, file_info["local_path"], api_key, payload, session
+                upload_to_intron,
+                file_info["local_path"],
+                api_key,
+                payload,
+                session,
             )
             future_to_file[future] = file_info
 
@@ -528,8 +532,7 @@ def poll_transcription_results(
             file_info = future_to_file[future]
 
             try:
-                api_response = future.result()
-                data = api_response.get("data", {})
+                data = future.result().get("data", {})
 
                 file_info["status"] = data.get("processing_status")
                 file_info["transcript"] = data.get("audio_transcript")
@@ -564,8 +567,8 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  python rescue_script.py --url-list s3_urls.txt --date 2025-10-11 --n 10 --api-key $INTRON_API_KEY
-  python rescue_script.py --url-list urls.txt --date test --n 3 --dry-run
+  python3 rescue_script.py --url-list s3_urls.txt --date 2025-10-11 --n 10 --api-key $INTRON_API_KEY
+  python3 rescue_script.py --url-list urls.txt --date test --n 3 --dry-run
         """,
     )
 
