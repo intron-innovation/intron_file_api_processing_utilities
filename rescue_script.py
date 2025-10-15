@@ -19,6 +19,7 @@ import argparse
 import csv
 import logging
 import os
+import shutil
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -238,13 +239,13 @@ def download_files(
 # ============================================================================
 
 
-def build_upload_payload(file_path: str, prompt_id: str) -> Dict[str, str]:
+def build_upload_payload(file_path: str, template_id: str) -> Dict[str, str]:
     """
     Build the payload for Intron API upload request with call center parameters.
 
     Args:
         file_path: Path to the file being uploaded
-        prompt_id: Prompt ID for Intron API processing
+        template_id: Template ID for Intron API processing
 
     Returns:
         Dictionary containing payload fields for the API request with all
@@ -253,7 +254,7 @@ def build_upload_payload(file_path: str, prompt_id: str) -> Dict[str, str]:
     payload = {
         "audio_file_name": os.path.basename(file_path),
         "use_category": "file_category_call_center",
-        "use_prompt_id": prompt_id,
+        "use_template_id": template_id,
         "get_summary": "TRUE",
         "get_call_center_results": "TRUE",
         "get_call_center_agent_score": "TRUE",
@@ -574,7 +575,7 @@ def load_all_urls(url_list_path: str) -> List[str]:
 def upload_files_to_intron(
     downloaded_files: List[Dict[str, Any]],
     api_key: str,
-    prompt_id: str,
+    template_id: str,
     max_workers: int,
 ) -> List[Dict[str, Any]]:
     """
@@ -583,7 +584,7 @@ def upload_files_to_intron(
     Args:
         downloaded_files: List of download results from download_files()
         api_key: Intron API authentication key
-        prompt_id: Prompt ID for Intron API processing
+        template_id: Template ID for Intron API processing
         max_workers: Maximum number of concurrent uploads
 
     Returns:
@@ -602,7 +603,7 @@ def upload_files_to_intron(
                 )
                 continue
 
-            payload = build_upload_payload(file_info["local_path"], prompt_id)
+            payload = build_upload_payload(file_info["local_path"], template_id)
             future = executor.submit(
                 upload_to_intron,
                 file_info["local_path"],
@@ -703,16 +704,16 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         epilog="""
 Example usage:
   # Using defaults (auto-detects recordings.txt/csv/xlsx, uses today's date)
-  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID
+  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID
 
   # Specifying custom file and date
-  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --url-list s3_urls.txt --date 2025-10-14
+  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --url-list s3_urls.txt --date 2025-10-14
 
   # Using auto-detected file with custom date
-  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --date 2025-10-14
+  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --date 2025-10-14
 
   # Dry run to preview files
-  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --dry-run
+  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --dry-run
 
 Supported input formats:
   - TXT: One S3 URL per line
@@ -743,9 +744,9 @@ Call center analysis parameters are automatically enabled.
         "If not specified, uses today's date (YYYY-MM-DD)",
     )
     parser.add_argument(
-        "--prompt-id",
-        required=True,
-        help="Prompt ID for Intron API processing (REQUIRED)",
+        "--template-id",
+        required=False,
+        help="Template ID for Intron API processing (can also use TEMPLATE_ID environment variable)",
     )
 
     # Optional arguments
@@ -800,6 +801,13 @@ def main() -> None:
             "ERROR: API key required. Provide via --api-key argument or INTRON_API_KEY environment variable"
         )
 
+    # Validate template ID
+    template_id = args.template_id or os.getenv("TEMPLATE_ID")
+    if not template_id:
+        raise SystemExit(
+            "ERROR: Template ID required. Provide via --template-id argument or TEMPLATE_ID environment variable"
+        )
+
     # Auto-detect url-list if not specified
     url_list_path = args.url_list
     if not url_list_path:
@@ -828,11 +836,18 @@ def main() -> None:
         logger.info(f"Total: {len(all_urls)} URLs will be processed")
         return
 
+    # Clean and recreate downloads folder
+    output_directory = Path(args.out_dir)
+    if output_directory.exists():
+        logger.info(f"Cleaning existing downloads folder: {output_directory}")
+        shutil.rmtree(output_directory)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Created fresh downloads folder: {output_directory}")
+
     # Step 1: Download files
     logger.info("=" * 70)
     logger.info("STEP 1: Downloading audio files")
     logger.info("=" * 70)
-    output_directory = Path(args.out_dir)
     downloaded_files = download_files(all_urls, output_directory, args.workers)
 
     # Step 2: Upload to Intron API
@@ -840,7 +855,7 @@ def main() -> None:
     logger.info("STEP 2: Uploading files to Intron Voice API")
     logger.info("=" * 70)
     uploaded_files = upload_files_to_intron(
-        downloaded_files, api_key, args.prompt_id, args.workers
+        downloaded_files, api_key, template_id, args.workers
     )
 
     # Step 3: Poll for transcription results

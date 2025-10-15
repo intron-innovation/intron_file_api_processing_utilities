@@ -34,6 +34,7 @@ The repository includes `runner.sh`, a convenient wrapper script that handles co
 1. **Create a `.env` file** in the project root with your credentials:
 ```bash
 INTRON_API_KEY=your-api-key-here
+TEMPLATE_ID=your-template-id-here
 AWS_DEFAULT_REGION=eu-west-2
 AWS_ACCESS_KEY_ID=your-aws-access-key
 AWS_SECRET_ACCESS_KEY=your-aws-secret-key
@@ -50,22 +51,22 @@ The runner script accepts all the same arguments as the Python script and passes
 
 ```bash
 # Simplest usage - auto-detects recordings file and uses today's date
-./runner.sh --prompt-id YOUR_PROMPT_ID
+./runner.sh --template-id YOUR_TEMPLATE_ID
 
 # With custom date
-./runner.sh --prompt-id YOUR_PROMPT_ID --date 2025-10-15
+./runner.sh --template-id YOUR_TEMPLATE_ID --date 2025-10-15
 
 # With specific file
-./runner.sh --prompt-id YOUR_PROMPT_ID --url-list my_recordings.txt
+./runner.sh --template-id YOUR_TEMPLATE_ID --url-list my_recordings.txt
 
 # With additional options
-./runner.sh --prompt-id YOUR_PROMPT_ID --url-list recordings.csv --date 2025-10-15 --workers 8
+./runner.sh --template-id YOUR_TEMPLATE_ID --url-list recordings.csv --date 2025-10-15 --workers 8
 
 # Dry run to preview files (with auto-detection)
-./runner.sh --prompt-id YOUR_PROMPT_ID --dry-run
+./runner.sh --template-id YOUR_TEMPLATE_ID --dry-run
 
 # With custom output directory
-./runner.sh --prompt-id YOUR_PROMPT_ID --out-dir /path/to/output
+./runner.sh --template-id YOUR_TEMPLATE_ID --out-dir /path/to/output
 ```
 
 **Note:** If you don't specify `--url-list`, the script automatically looks for `recordings.txt`, `recordings.csv`, or `recordings.xlsx` (in that order).
@@ -84,23 +85,21 @@ If you prefer to run the script directly without the wrapper:
 conda activate rescue_script
 
 # Simplest - uses auto-detection and today's date
-python rescue_script.py --prompt-id YOUR_PROMPT_ID
+python rescue_script.py --template-id YOUR_TEMPLATE_ID
 
 # With specific parameters
-python rescue_script.py --prompt-id YOUR_PROMPT_ID --url-list recordings.txt --date 2025-10-15 --api-key $INTRON_API_KEY
+python rescue_script.py --template-id YOUR_TEMPLATE_ID --url-list recordings.txt --date 2025-10-15 --api-key $INTRON_API_KEY
 ```
 
 ---
 
 ## Command-Line Arguments
 
-### Required Arguments
-
-- `--prompt-id`: Prompt ID for Intron API processing **(REQUIRED)**
-  - This is a required parameter that must be provided
-  - Contact Intron Health to get your prompt ID
-
 ### Optional Arguments
+
+- `--template-id`: Template ID for Intron API processing
+  - **Alternative:** Set `TEMPLATE_ID` environment variable in `.env` file
+  - Contact Intron Health to get your template ID
 
 - `--url-list`: Path to input file (TXT/CSV/XLSX)
   - **Default:** Auto-detects `recordings.txt`, `recordings.csv`, or `recordings.xlsx` (in priority order)
@@ -133,22 +132,22 @@ python rescue_script.py --help
 
 ```bash
 # Simplest usage - uses auto-detected recordings file and today's date
-./runner.sh --prompt-id YOUR_PROMPT_ID
+./runner.sh --template-id YOUR_TEMPLATE_ID
 
 # Dry run to preview what will be processed
-./runner.sh --prompt-id YOUR_PROMPT_ID --dry-run
+./runner.sh --template-id YOUR_TEMPLATE_ID --dry-run
 
 # With specific date
-./runner.sh --prompt-id YOUR_PROMPT_ID --date 2025-10-15
+./runner.sh --template-id YOUR_TEMPLATE_ID --date 2025-10-15
 
 # With specific file
-./runner.sh --prompt-id YOUR_PROMPT_ID --url-list my_files.txt
+./runner.sh --template-id YOUR_TEMPLATE_ID --url-list my_files.txt
 
 # With high concurrency
-./runner.sh --prompt-id YOUR_PROMPT_ID --workers 8
+./runner.sh --template-id YOUR_TEMPLATE_ID --workers 8
 
 # Full specification
-./runner.sh --prompt-id YOUR_PROMPT_ID --url-list recordings.csv --date 2025-10-15 --workers 8
+./runner.sh --template-id YOUR_TEMPLATE_ID --url-list recordings.csv --date 2025-10-15 --workers 8
 ```
 
 **Notes:**
@@ -248,6 +247,9 @@ Call center analysis results are automatically flattened and included:
 # API Key (alternative to --api-key)
 export INTRON_API_KEY="your-api-key-here"
 
+# Template ID (alternative to --template-id)
+export TEMPLATE_ID="your-template-id-here"
+
 # AWS Credentials (if using S3)
 export AWS_ACCESS_KEY_ID="your-aws-key"
 export AWS_SECRET_ACCESS_KEY="your-aws-secret"
@@ -263,7 +265,7 @@ export AWS_DEFAULT_REGION="eu-west-2"
 | ModuleNotFoundError | `pip install -r requirements.txt` |
 | NoCredentialsError | Set AWS credentials in `.env` or run `aws configure` |
 | API key required | Set `INTRON_API_KEY` in `.env` file |
-| Prompt ID required error | `--prompt-id` is required - contact Intron Health to get your prompt ID |
+| Template ID required error | Set `TEMPLATE_ID` in `.env` file or provide via `--template-id` argument |
 | No recordings file found | Create `recordings.txt`, `recordings.csv`, or `recordings.xlsx` in the current directory |
 | File not found | Check file path and ensure it exists, or use auto-detection |
 | Unsupported format | Use .txt, .csv, or .xlsx files only |
