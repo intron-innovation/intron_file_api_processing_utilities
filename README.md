@@ -1,85 +1,149 @@
-# Quick Reference Guide
+# Call Center Audio Transcription - Quick Reference Guide
+
+## Overview
+
+This script automates the complete workflow for transcribing and analyzing call center audio recordings using the Intron Voice API. It downloads audio files from AWS S3, processes them with comprehensive call center analysis, and outputs detailed results to CSV.
+
+**Key Features:**
+- ✓ Multiple input formats: TXT, CSV, XLSX
+- ✓ Processes ALL files in input (no sampling required)
+- ✓ Automatic call center analysis (agent scoring, sentiment, compliance, etc.)
+- ✓ Dynamic CSV output with flattened API response fields
+- ✓ Concurrent processing for optimal performance
+
+---
 
 ## Installation
 
 ```bash
 conda create -n rescue_script python=3.12
 conda activate rescue_script
-
 pip install -r requirements.txt
 ```
 
-Configure AWS credentials:
+---
+
+## Using the Runner Script
+
+The repository includes `runner.sh`, a convenient wrapper script that handles conda environment setup and automatically loads environment variables from `.env`.
+
+### Setup
+
+1. **Create a `.env` file** in the project root with your credentials:
 ```bash
-aws configure
-# OR set environment variables
-export AWS_ACCESS_KEY_ID="your-key"
-export AWS_SECRET_ACCESS_KEY="your-secret"
+INTRON_API_KEY=your-api-key-here
+AWS_DEFAULT_REGION=eu-west-2
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+```
+
+2. **Make the runner script executable**:
+```bash
+chmod +x runner.sh
+```
+
+### Usage
+
+The runner script accepts all the same arguments as the Python script and passes them through:
+
+```bash
+# Basic usage
+./runner.sh --url-list recordings.txt --date 2025-10-15
+
+# With additional options
+./runner.sh --url-list recordings.csv --date 2025-10-15 --workers 8
+
+# Dry run to preview files
+./runner.sh --url-list recordings.txt --date test --dry-run
+
+# With custom output directory
+./runner.sh --url-list recordings.xlsx --date 2025-10-15 --out-dir /path/to/output
+```
+
+### What the runner script does:
+- ✓ Automatically loads environment variables from `.env` file
+- ✓ Initializes conda and activates the `rescue_script` environment
+- ✓ Passes all command-line arguments to the Python script
+- ✓ No need to manually activate conda or export environment variables
+
+### Alternative: Direct Python execution
+
+If you prefer to run the script directly without the wrapper:
+
+```bash
+conda activate rescue_script
+python rescue_script.py --url-list recordings.txt --date 2025-10-15 --api-key $INTRON_API_KEY
 ```
 
 ---
 
-## Common Use Cases
+## Command-Line Arguments
 
-### 1. Basic Transcription (10 files)
-```bash
-python rescue_script.py \
-  --url-list audio_urls.txt \
-  --date 2025-10-11 \
-  --n 10 \
-  --api-key $INTRON_API_KEY
-```
+### Required Arguments
+- `--url-list`: Path to input file (TXT/CSV/XLSX)
+- `--date`: Date string for output filename (e.g., 2025-10-15)
 
-### 2. Telehealth with Summary (20 files, 8 workers)
-```bash
-python rescue_script.py \
-  --url-list medical_recordings.txt \
-  --date 2025-10-11 \
-  --n 20 \
-  --api-key $INTRON_API_KEY \
-  --use-category telehealth \
-  --get-summary TRUE \
-  --workers 8
-```
+### Optional Arguments
+- `--api-key`: Intron API key (or set `INTRON_API_KEY` env var)
+- `--out-dir`: Download directory (default: `downloads`)
+- `--workers`: Concurrent workers (default: 4)
+- `--dry-run`: Preview files without processing
 
-### 3. Legal Transcription with Action Items
+**Quick help:**
 ```bash
-python rescue_script.py \
-  --url-list legal_recordings.txt \
-  --date 2025-10-11 \
-  --n 15 \
-  --api-key $INTRON_API_KEY \
-  --use-category legal \
-  --use-diarization TRUE \
-  --get-action-items TRUE \
-  --get-decisions TRUE
-```
-
-### 4. Preview Mode (Dry Run)
-```bash
-python rescue_script.py \
-  --url-list test_urls.txt \
-  --date test \
-  --n 5 \
-  --dry-run
+python rescue_script.py --help
 ```
 
 ---
 
-## URL List Format
+## Quick Start Examples
 
-Create a text file with one URL per line:
+```bash
+# Basic usage with TXT file
+./runner.sh --url-list recordings.txt --date 2025-10-15
 
+# With CSV file and high concurrency
+./runner.sh --url-list recordings.csv --date 2025-10-15 --workers 8
+
+# Preview files without processing (dry run)
+./runner.sh --url-list recordings.txt --date test --dry-run
+```
+
+**Note:** All call center analysis parameters (agent scoring, sentiment, compliance, etc.) are automatically enabled
+
+---
+
+## Input File Formats
+
+The script supports three input formats. **S3 URLs must always be in the first column** for CSV and XLSX files.
+
+### 1. TXT File (One URL per line)
 ```text
-s3://my-bucket/audio/recording1.wav
-s3://my-bucket/audio/recording2.mp3
-https://example.com/audio/recording3.wav
-https://signed-url.s3.amazonaws.com/recording4.mp3?AWSAccessKeyId=...
+s3://my-bucket/call-center/recording1.wav
+s3://my-bucket/call-center/recording2.mp3
+s3://my-bucket/call-center/recording3.wav
 ```
 
-**Supported formats:**
-- S3 URIs: `s3://bucket-name/path/to/file`
+### 2. CSV File (URLs in first column)
+```csv
+s3_url
+s3://my-bucket/call1.wav
+s3://my-bucket/call2.mp3
+s3://my-bucket/call3.wav
+```
+
+### 3. XLSX File (URLs in first column)
+| Column A (S3 URLs) |
+|-------------------|
+| s3://my-bucket/call1.wav |
+| s3://my-bucket/call2.mp3 |
+| s3://my-bucket/call3.wav |
+
+**Supported URL formats:**
+- S3 URIs: `s3://bucket-name/path/to/file` (recommended)
 - HTTP/HTTPS URLs: Any publicly accessible or signed URL
+
+**Important:** All files in the input list will be processed (no sampling)
 
 ---
 
@@ -87,36 +151,39 @@ https://signed-url.s3.amazonaws.com/recording4.mp3?AWSAccessKeyId=...
 
 ### CSV File: `results_{date}_{timestamp}.csv`
 
+The output CSV contains **dynamic columns** that capture ALL fields from the API response. Nested JSON structures are flattened using underscores.
+
+**Base Columns (always present):**
+
 | Column | Description | Example |
 |--------|-------------|---------|
 | uuid | Unique file identifier | `a1b2c3d4-5678-90ab-cdef-1234567890ab` |
 | original_url | Source URL | `s3://bucket/audio.wav` |
 | local_path | Downloaded file path | `downloads/a1b2c3d4_audio.wav` |
 | file_id | Intron API identifier | `file_abc123xyz` |
-| status | Processing status | `FILE_TRANSCRIBED` |
-| transcript | Transcription text | `Hello, this is a test...` |
 | error | Error message (if any) | `None` or error description |
 
----
+**Dynamic API Response Columns (examples):**
 
-## Workflow Steps
+Call center analysis results are automatically flattened and included:
 
-```
-1. LOAD & SAMPLE
-   └─ Read URL list → Randomly select N files
+| Column Example | Description |
+|---------------|-------------|
+| `data_processing_status` | Processing status |
+| `data_audio_transcript` | Full transcript text |
+| `data_call_center_results_agent_score` | Overall agent performance score |
+| `data_call_center_results_sentiment` | Call sentiment analysis |
+| `data_call_center_compliance` | Compliance check results |
+| `data_call_center_product_info` | Product information extracted |
+| `data_call_center_agent_score_category` | Categorized agent scores |
+| `data_call_center_feedback` | Customer feedback analysis |
+| `data_summary` | Call summary |
+| ... | (and many more depending on API response) |
 
-2. DOWNLOAD
-   └─ Concurrent downloads from S3/HTTP → Local storage
-
-3. UPLOAD
-   └─ Submit files to Intron API → Receive file_id
-
-4. POLL
-   └─ Check transcription status → Wait for completion
-
-5. SAVE
-   └─ Write results to CSV → Summary statistics
-```
+**Note:**
+- Missing values are filled with `"N/A"`
+- Nested structures like `data.call_center_results.agent_score` become `data_call_center_results_agent_score`
+- Column count varies based on API responses (typically 30-50+ columns)
 
 ---
 
@@ -136,117 +203,22 @@ export AWS_DEFAULT_REGION="eu-west-2"
 
 ## Troubleshooting
 
-### Issue: "ModuleNotFoundError: No module named 'boto3'"
-**Solution:**
-```bash
-pip install boto3 requests
-```
-
-### Issue: "NoCredentialsError: Unable to locate credentials"
-**Solution:**
-```bash
-aws configure
-# OR
-export AWS_ACCESS_KEY_ID="your-key"
-export AWS_SECRET_ACCESS_KEY="your-secret"
-```
-
-### Issue: "ERROR: API key required"
-**Solution:**
-```bash
-export INTRON_API_KEY="your-api-key"
-# OR
-python rescue_script.py --api-key "your-api-key" ...
-```
-
-### Issue: "FileNotFoundError: URL list file not found"
-**Solution:** Check the file path is correct
-```bash
-ls -la your-url-list.txt
-python rescue_script.py --url-list /full/path/to/urls.txt ...
-```
-
-### Issue: Downloads are slow
-**Solution:** Increase workers (default: 4)
-```bash
-python rescue_script.py --workers 10 ...
-```
-
-### Issue: Need to check what will be processed
-**Solution:** Use dry-run mode
-```bash
-python rescue_script.py --dry-run ...
-```
+| Issue | Solution |
+|-------|----------|
+| ModuleNotFoundError | `pip install -r requirements.txt` |
+| NoCredentialsError | Set AWS credentials in `.env` or run `aws configure` |
+| API key required | Set `INTRON_API_KEY` in `.env` file |
+| File not found | Check file path and ensure it exists |
+| Unsupported format | Use .txt, .csv, or .xlsx files only |
+| CSV is empty | Ensure URLs are in the first column |
+| Slow downloads | Increase workers: `--workers 10` |
+| Missing CSV columns | Columns are dynamic based on API responses |
 
 ---
 
 ## Performance Tips
 
-1. **Optimize worker count** based on your network and CPU:
-   - Fast network: `--workers 10` or more
-   - Slow network: `--workers 4` (default)
-   - CPU bound: Match your CPU core count
+- **Increase workers** for faster processing: `--workers 8` or `--workers 10`
+- **Process large datasets in batches** (split files into chunks of 100-500 URLs)
+- **Monitor progress**: `./runner.sh ... 2>&1 | tee process.log`
 
-2. **Process in batches** for large datasets:
-   ```bash
-   # Split large URL list into chunks
-   split -l 100 all_urls.txt batch_
-
-   # Process each batch
-   for batch in batch_*; do
-     python rescue_script.py --url-list $batch --n 100 ...
-   done
-   ```
-
-3. **Monitor progress** with logs:
-   ```bash
-   python rescue_script.py ... 2>&1 | tee process.log
-   ```
-
----
-
-## API Rate Limits
-
-The Intron Voice API has these constraints:
-
-- **File size**: Max 100 MB per file
-- **Duration**: Max 10 minutes per audio
-- **Rate limit**: 30 requests per minute
-
-The script handles retries automatically but respects these limits.
-
----
-
-## Code Structure Quick Reference
-
-```
-rescue_script.py
-├─ Section 1: Constants & Configuration
-├─ Section 2: HTTP Session Management
-├─ Section 3: File Download Operations
-│  ├─ parse_s3_uri()
-│  ├─ download_from_s3()
-│  ├─ download_from_http()
-│  └─ download_files()
-├─ Section 4: Intron Voice API Integration
-│  ├─ build_upload_payload()
-│  ├─ upload_to_intron()
-│  └─ poll_transcription_status()
-├─ Section 5: Data Management & CSV Output
-│  └─ write_results_to_csv()
-├─ Section 6: Workflow Orchestration
-│  ├─ load_and_sample_urls()
-│  ├─ upload_files_to_intron()
-│  └─ poll_transcription_results()
-└─ Section 7: Main Entry Point
-   ├─ setup_argument_parser()
-   └─ main()
-```
-
----
-
-## Support
-
-- **Script issues**: Check README.md and REFACTORING_SUMMARY.md
-- **API questions**: voice@intron.io
-- **API docs**: https://transcribe.intron.health/docs/

@@ -1,18 +1,24 @@
 """
-Intron Voice API Rescue Script
+Intron Voice API Rescue Script - Call Center Audio Transcription
 
-This script automates the workflow of downloading audio files from AWS S3 or HTTP URLs,
-uploading them to the Intron Voice API for transcription, and collecting results into a CSV file.
+This script automates the workflow of downloading call center audio files from AWS S3,
+uploading them to the Intron Voice API for transcription and analysis, and collecting
+comprehensive results into a CSV file.
+
+Features:
+- Supports multiple input formats: TXT, CSV, and XLSX files
+- Processes ALL audio files from input (no sampling)
+- Automatically applies call center analysis parameters
+- Flattens nested API responses into CSV columns
+- Includes: agent scoring, sentiment analysis, compliance checks, product insights, etc.
 
 Author: Intron Health Integration Team
-Last Updated: 2025-10-11
 """
 
 import argparse
 import csv
 import logging
 import os
-import random
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,9 +27,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import boto3
+import pandas as pd
 import requests
+import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+# Disable SSL warnings when verify=False is used
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ============================================================================
 # SECTION 1: CONSTANTS & CONFIGURATION
@@ -139,7 +150,7 @@ def download_from_http(
     """
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with session.get(url, stream=True, timeout=300) as response:
+    with session.get(url, stream=True, timeout=300, verify=False) as response:
         response.raise_for_status()
         with open(destination_path, "wb") as file_handle:
             for chunk in response.iter_content(chunk_size=8192):
@@ -227,37 +238,30 @@ def download_files(
 # ============================================================================
 
 
-def build_upload_payload(args: argparse.Namespace, file_path: str) -> Dict[str, str]:
+def build_upload_payload(file_path: str) -> Dict[str, str]:
     """
-    Build the payload for Intron API upload request from CLI arguments.
+    Build the payload for Intron API upload request with call center parameters.
 
     Args:
-        args: Parsed command-line arguments containing optional API parameters
         file_path: Path to the file being uploaded
 
     Returns:
-        Dictionary containing payload fields for the API request
+        Dictionary containing payload fields for the API request with all
+        call center analysis parameters enabled
     """
-    payload = {"audio_file_name": os.path.basename(file_path)}
-
-    # Include optional API parameters from CLI flags
-    optional_params = [
-        "use_category",
-        "use_diarization",
-        "use_prompt_id",
-        "get_summary",
-        "get_participants",
-        "get_decisions",
-        "get_action_items",
-        "get_key_topics",
-        "get_next_steps",
-    ]
-
-    for param in optional_params:
-        value = getattr(args, param, None)
-        if value is not None:
-            api_key = param.replace("_", "-")
-            payload[api_key] = value
+    payload = {
+        "audio_file_name": os.path.basename(file_path),
+        "use_category": "file_category_call_center",
+        "get_summary": "TRUE",
+        "get_call_center_results": "TRUE",
+        "get_call_center_agent_score": "TRUE",
+        "get_call_center_agent_score_category": "TRUE",
+        "get_call_center_product_info": "TRUE",
+        "get_call_center_product_insights": "TRUE",
+        "get_call_center_compliance": "TRUE",
+        "get_call_center_feedback": "TRUE",
+        "get_call_center_sentiment": "TRUE",
+    }
 
     return payload
 
@@ -288,6 +292,7 @@ def upload_to_intron(
             files={"audio_file_blob": (os.path.basename(file_path), audio_file)},
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=300,
+            verify=False,
         )
         response.raise_for_status()
 
@@ -329,7 +334,9 @@ def poll_transcription_status(
             )
 
         try:
-            response = session.get(status_url, headers=headers, timeout=30)
+            response = session.get(
+                status_url, headers=headers, timeout=30, verify=False
+            )
             response.raise_for_status()
 
             json_response = response.json()
@@ -361,41 +368,106 @@ def poll_transcription_status(
 # ============================================================================
 
 
+def flatten_json(data: Any, parent_key: str = "", sep: str = "_") -> Dict[str, Any]:
+    """
+    Recursively flatten nested JSON/dict structures using underscore separator.
+
+    Args:
+        data: Dictionary or other data structure to flatten
+        parent_key: Key prefix for nested fields
+        sep: Separator to use between nested keys (default: "_")
+
+    Returns:
+        Flattened dictionary with underscore-separated keys
+
+    Examples:
+        >>> flatten_json({"a": {"b": 1, "c": 2}})
+        {"a_b": 1, "a_c": 2}
+
+        >>> flatten_json({"data": {"status": "done", "results": {"count": 5}}})
+        {"data_status": "done", "data_results_count": 5}
+    """
+    items = []
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            new_key = f"{parent_key}{sep}{key}" if parent_key else key
+
+            if isinstance(value, dict):
+                # Recursively flatten nested dictionaries
+                items.extend(flatten_json(value, new_key, sep=sep).items())
+            elif isinstance(value, list):
+                # Convert lists to JSON string for CSV compatibility
+                items.append((new_key, str(value)))
+            else:
+                items.append((new_key, value))
+    else:
+        # Non-dict values are returned as-is with parent key
+        items.append((parent_key, data))
+
+    return dict(items)
+
+
 def write_results_to_csv(output_path: Path, results: List[Dict[str, Any]]) -> None:
     """
-    Write transcription results to a CSV file.
+    Write transcription results to a CSV file with dynamic columns.
+
+    This function flattens all nested JSON fields from API responses and creates
+    a CSV with columns for every unique field found across all results.
 
     Args:
         output_path: Path where the CSV file will be created
         results: List of result dictionaries to write
 
-    The CSV will contain the following columns:
-        - uuid: Unique identifier assigned to the file
-        - original_url: Source URL of the audio file
-        - local_path: Path where file was downloaded
-        - file_id: Intron API file identifier
-        - status: Processing status from API
-        - transcript: Transcribed text (if available)
-        - error: Error message (if any)
+    The CSV will contain:
+        - Base columns: uuid, original_url, local_path, file_id, error
+        - All flattened API response fields (dynamically discovered)
+        - Missing values are filled with "N/A"
     """
-    fieldnames = [
-        "uuid",
-        "original_url",
-        "local_path",
-        "file_id",
-        "status",
-        "transcript",
-        "error",
-    ]
+    if not results:
+        logger.warning("No results to write to CSV")
+        return
 
+    # Flatten all results and collect unique column names
+    flattened_results = []
+    all_columns = set()
+
+    for result in results:
+        # Create a copy to avoid modifying the original
+        flattened_result = {}
+
+        # Preserve base columns
+        for base_key in ["uuid", "original_url", "local_path", "file_id", "error"]:
+            if base_key in result:
+                flattened_result[base_key] = result.get(base_key, "N/A")
+
+        # Flatten the entire result to capture all nested fields
+        flat_data = flatten_json(result)
+        flattened_result.update(flat_data)
+
+        # Track all unique columns
+        all_columns.update(flattened_result.keys())
+        flattened_results.append(flattened_result)
+
+    # Define column order: base columns first, then alphabetically sorted API fields
+    base_columns = ["uuid", "original_url", "local_path", "file_id", "error"]
+    api_columns = sorted([col for col in all_columns if col not in base_columns])
+    fieldnames = base_columns + api_columns
+
+    # Write to CSV
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
 
-        for result in results:
-            writer.writerow(result)
+        for result in flattened_results:
+            # Fill missing columns with "N/A"
+            row = {col: result.get(col, "N/A") for col in fieldnames}
+            writer.writerow(row)
+
+    logger.info(f"Wrote {len(flattened_results)} results to {output_path}")
+    logger.info(f"CSV contains {len(fieldnames)} columns")
 
 
 # ============================================================================
@@ -403,40 +475,74 @@ def write_results_to_csv(output_path: Path, results: List[Dict[str, Any]]) -> No
 # ============================================================================
 
 
-def load_and_sample_urls(url_list_path: str, sample_size: int) -> List[str]:
+def load_all_urls(url_list_path: str) -> List[str]:
     """
-    Load URLs from a file and randomly sample a subset.
+    Load all URLs from a file (supports TXT, CSV, XLSX formats).
+
+    For CSV and XLSX files, reads URLs from the first column.
+    For TXT files, reads one URL per line.
 
     Args:
-        url_list_path: Path to text file containing URLs (one per line)
-        sample_size: Number of URLs to randomly select
+        url_list_path: Path to file containing URLs
 
     Returns:
-        List of sampled URLs
+        List of all URLs found in the file
 
     Raises:
         FileNotFoundError: If URL list file doesn't exist
-        ValueError: If file is empty
+        ValueError: If file is empty or unsupported format
     """
-    if not Path(url_list_path).exists():
+    file_path = Path(url_list_path)
+
+    if not file_path.exists():
         raise FileNotFoundError(f"URL list file not found: {url_list_path}")
 
-    with open(url_list_path, "r") as file:
-        urls = [line.strip() for line in file if line.strip()]
+    file_extension = file_path.suffix.lower()
+    urls = []
+
+    if file_extension == ".txt":
+        # Read text file line by line
+        with open(url_list_path, "r") as file:
+            urls = [line.strip() for line in file if line.strip()]
+
+    elif file_extension == ".csv":
+        # Read CSV file, extract first column
+        try:
+            df = pd.read_csv(url_list_path)
+            if df.empty:
+                raise ValueError(f"CSV file is empty: {url_list_path}")
+            # Get first column values and convert to list
+            urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+        except Exception as e:
+            raise ValueError(f"Failed to read CSV file {url_list_path}: {e}")
+
+    elif file_extension in [".xlsx", ".xls"]:
+        # Read Excel file, extract first column from first sheet
+        try:
+            df = pd.read_excel(url_list_path, engine="openpyxl")
+            if df.empty:
+                raise ValueError(f"Excel file is empty: {url_list_path}")
+            # Get first column values and convert to list
+            urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+        except Exception as e:
+            raise ValueError(f"Failed to read Excel file {url_list_path}: {e}")
+
+    else:
+        raise ValueError(
+            f"Unsupported file format: {file_extension}. "
+            f"Supported formats: .txt, .csv, .xlsx, .xls"
+        )
 
     if not urls:
-        raise ValueError(f"URL list file is empty: {url_list_path}")
+        raise ValueError(f"No URLs found in file: {url_list_path}")
 
-    sampled_urls = random.sample(urls, min(sample_size, len(urls)))
-    logger.info(f"Loaded {len(urls)} URLs, sampled {len(sampled_urls)} for processing")
-
-    return sampled_urls
+    logger.info(f"Loaded {len(urls)} URLs from {url_list_path}")
+    return urls
 
 
 def upload_files_to_intron(
     downloaded_files: List[Dict[str, Any]],
     api_key: str,
-    args: argparse.Namespace,
     max_workers: int,
 ) -> List[Dict[str, Any]]:
     """
@@ -445,7 +551,6 @@ def upload_files_to_intron(
     Args:
         downloaded_files: List of download results from download_files()
         api_key: Intron API authentication key
-        args: CLI arguments containing optional API parameters
         max_workers: Maximum number of concurrent uploads
 
     Returns:
@@ -464,7 +569,7 @@ def upload_files_to_intron(
                 )
                 continue
 
-            payload = build_upload_payload(args, file_info["local_path"])
+            payload = build_upload_payload(file_info["local_path"])
             future = executor.submit(
                 upload_to_intron,
                 file_info["local_path"],
@@ -563,12 +668,21 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         Configured ArgumentParser instance
     """
     parser = argparse.ArgumentParser(
-        description="Intron Voice API Rescue Script - Automated audio transcription workflow",
+        description="Intron Voice API Rescue Script - Call Center Audio Transcription",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  python3 rescue_script.py --url-list s3_urls.txt --date 2025-10-11 --n 10 --api-key $INTRON_API_KEY
-  python3 rescue_script.py --url-list urls.txt --date test --n 3 --dry-run
+  python3 rescue_script.py --url-list s3_urls.txt --date 2025-10-14 --api-key $INTRON_API_KEY
+  python3 rescue_script.py --url-list urls.csv --date test --dry-run
+  python3 rescue_script.py --url-list urls.xlsx --date 2025-10-14 --workers 8
+
+Supported input formats:
+  - TXT: One S3 URL per line
+  - CSV: S3 URLs in first column
+  - XLSX: S3 URLs in first column
+
+Note: All files in the input list will be processed (no sampling).
+Call center analysis parameters are automatically enabled.
         """,
     )
 
@@ -576,18 +690,12 @@ Example usage:
     parser.add_argument(
         "--url-list",
         required=True,
-        help="Path to text file containing audio file URLs (one per line)",
+        help="Path to file containing audio file URLs (supports .txt, .csv, .xlsx)",
     )
     parser.add_argument(
         "--date",
         required=True,
-        help="Date string for output file naming (e.g., 2025-10-11)",
-    )
-    parser.add_argument(
-        "--n",
-        type=int,
-        required=True,
-        help="Number of files to randomly sample from the URL list",
+        help="Date string for output file naming (e.g., 2025-10-14)",
     )
 
     # Optional arguments
@@ -609,32 +717,7 @@ Example usage:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview selected URLs without downloading or uploading",
-    )
-
-    # Intron API optional parameters
-    parser.add_argument(
-        "--use-category", help="File processing category (e.g., telehealth, legal)"
-    )
-    parser.add_argument(
-        "--use-diarization", help="Enable speaker diarization (TRUE/FALSE)"
-    )
-    parser.add_argument("--use-prompt-id", help="Custom prompt identifier")
-    parser.add_argument("--get-summary", help="Request summary generation (TRUE/FALSE)")
-    parser.add_argument(
-        "--get-participants", help="Request participant identification (TRUE/FALSE)"
-    )
-    parser.add_argument(
-        "--get-decisions", help="Request decision extraction (TRUE/FALSE)"
-    )
-    parser.add_argument(
-        "--get-action-items", help="Request action item extraction (TRUE/FALSE)"
-    )
-    parser.add_argument(
-        "--get-key-topics", help="Request key topic extraction (TRUE/FALSE)"
-    )
-    parser.add_argument(
-        "--get-next-steps", help="Request next steps extraction (TRUE/FALSE)"
+        help="Preview URLs to be processed without downloading or uploading",
     )
 
     return parser
@@ -667,18 +750,18 @@ def main() -> None:
             "ERROR: API key required. Provide via --api-key argument or INTRON_API_KEY environment variable"
         )
 
-    # Load and sample URLs
+    # Load all URLs from input file
     try:
-        sampled_urls = load_and_sample_urls(args.url_list, args.n)
+        all_urls = load_all_urls(args.url_list)
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"ERROR: {error}")
 
     # Dry run mode - preview URLs and exit
     if args.dry_run:
-        logger.info("DRY RUN MODE - Previewing selected URLs:")
-        for url in sampled_urls:
-            print(f"  • {url}")
-        logger.info(f"Total: {len(sampled_urls)} URLs selected")
+        logger.info("DRY RUN MODE - Previewing URLs to be processed:")
+        for idx, url in enumerate(all_urls, 1):
+            print(f"  {idx}. {url}")
+        logger.info(f"Total: {len(all_urls)} URLs will be processed")
         return
 
     # Step 1: Download files
@@ -686,15 +769,13 @@ def main() -> None:
     logger.info("STEP 1: Downloading audio files")
     logger.info("=" * 70)
     output_directory = Path(args.out_dir)
-    downloaded_files = download_files(sampled_urls, output_directory, args.workers)
+    downloaded_files = download_files(all_urls, output_directory, args.workers)
 
     # Step 2: Upload to Intron API
     logger.info("=" * 70)
     logger.info("STEP 2: Uploading files to Intron Voice API")
     logger.info("=" * 70)
-    uploaded_files = upload_files_to_intron(
-        downloaded_files, api_key, args, args.workers
-    )
+    uploaded_files = upload_files_to_intron(downloaded_files, api_key, args.workers)
 
     # Step 3: Poll for transcription results
     logger.info("=" * 70)
