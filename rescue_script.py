@@ -45,7 +45,7 @@ INTRON_UPLOAD_URL = "https://infer.voice.intron.io/file/v1/upload"
 INTRON_STATUS_URL_TEMPLATE = "https://infer.voice.intron.io/file/v1/status/{file_id}"
 
 # Polling configuration
-DEFAULT_POLL_INTERVAL_SECONDS = 5
+DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_MAX_WAIT_SECONDS = 600
 
 # Logging setup
@@ -224,9 +224,9 @@ def download_files(
             try:
                 future.result()
                 logger.info(f"Successfully downloaded: {url}")
-            except Exception as error:
-                logger.error(f"Failed to download {url}: {error}")
-                result_entry["error"] = str(error)
+            except Exception as exc:
+                logger.error(f"Failed to download {url}: {exc}")
+                result_entry["error"] = str(exc)
 
             results.append(result_entry)
 
@@ -238,12 +238,13 @@ def download_files(
 # ============================================================================
 
 
-def build_upload_payload(file_path: str) -> Dict[str, str]:
+def build_upload_payload(file_path: str, prompt_id: str) -> Dict[str, str]:
     """
     Build the payload for Intron API upload request with call center parameters.
 
     Args:
         file_path: Path to the file being uploaded
+        prompt_id: Prompt ID for Intron API processing
 
     Returns:
         Dictionary containing payload fields for the API request with all
@@ -252,6 +253,7 @@ def build_upload_payload(file_path: str) -> Dict[str, str]:
     payload = {
         "audio_file_name": os.path.basename(file_path),
         "use_category": "file_category_call_center",
+        "use_prompt_id": prompt_id,
         "get_summary": "TRUE",
         "get_call_center_results": "TRUE",
         "get_call_center_agent_score": "TRUE",
@@ -340,6 +342,7 @@ def poll_transcription_status(
             response.raise_for_status()
 
             json_response = response.json()
+
             data = json_response.get("data", {})
             processing_status = str(data.get("processing_status", "")).upper()
 
@@ -357,8 +360,8 @@ def poll_transcription_status(
             if any(indicator in processing_status for indicator in failure_indicators):
                 return json_response
 
-        except Exception as error:
-            logger.warning(f"Polling error for file_id {file_id}: {error}")
+        except Exception as exc:
+            logger.warning(f"Polling error for file_id {file_id}: {exc}")
 
         time.sleep(poll_interval)
 
@@ -475,6 +478,34 @@ def write_results_to_csv(output_path: Path, results: List[Dict[str, Any]]) -> No
 # ============================================================================
 
 
+def auto_detect_recordings_file() -> str:
+    """
+    Auto-detect recordings file in the current directory.
+
+    Searches for files named 'recordings' with extensions in priority order:
+    1. recordings.txt
+    2. recordings.csv
+    3. recordings.xlsx
+
+    Returns:
+        Path to the first found recordings file
+
+    Raises:
+        FileNotFoundError: If no recordings file is found
+    """
+    file_priorities = ["recordings.txt", "recordings.csv", "recordings.xlsx"]
+
+    for filename in file_priorities:
+        file_path = Path(filename)
+        if file_path.exists():
+            logger.info(f"Auto-detected recordings file: {filename}")
+            return str(file_path)
+
+    raise FileNotFoundError(
+        "No recordings file found. Expected one of: recordings.txt, recordings.csv, or recordings.xlsx"
+    )
+
+
 def load_all_urls(url_list_path: str) -> List[str]:
     """
     Load all URLs from a file (supports TXT, CSV, XLSX formats).
@@ -513,8 +544,8 @@ def load_all_urls(url_list_path: str) -> List[str]:
                 raise ValueError(f"CSV file is empty: {url_list_path}")
             # Get first column values and convert to list
             urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
-        except Exception as e:
-            raise ValueError(f"Failed to read CSV file {url_list_path}: {e}")
+        except Exception as exc:
+            raise ValueError(f"Failed to read CSV file {url_list_path}: {exc}")
 
     elif file_extension in [".xlsx", ".xls"]:
         # Read Excel file, extract first column from first sheet
@@ -524,8 +555,8 @@ def load_all_urls(url_list_path: str) -> List[str]:
                 raise ValueError(f"Excel file is empty: {url_list_path}")
             # Get first column values and convert to list
             urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
-        except Exception as e:
-            raise ValueError(f"Failed to read Excel file {url_list_path}: {e}")
+        except Exception as exc:
+            raise ValueError(f"Failed to read Excel file {url_list_path}: {exc}")
 
     else:
         raise ValueError(
@@ -543,6 +574,7 @@ def load_all_urls(url_list_path: str) -> List[str]:
 def upload_files_to_intron(
     downloaded_files: List[Dict[str, Any]],
     api_key: str,
+    prompt_id: str,
     max_workers: int,
 ) -> List[Dict[str, Any]]:
     """
@@ -551,6 +583,7 @@ def upload_files_to_intron(
     Args:
         downloaded_files: List of download results from download_files()
         api_key: Intron API authentication key
+        prompt_id: Prompt ID for Intron API processing
         max_workers: Maximum number of concurrent uploads
 
     Returns:
@@ -569,7 +602,7 @@ def upload_files_to_intron(
                 )
                 continue
 
-            payload = build_upload_payload(file_info["local_path"])
+            payload = build_upload_payload(file_info["local_path"], prompt_id)
             future = executor.submit(
                 upload_to_intron,
                 file_info["local_path"],
@@ -583,8 +616,7 @@ def upload_files_to_intron(
             file_info = future_to_file[future]
 
             try:
-                api_response = future.result()
-                file_id = api_response.get("data", {}).get("file_id")
+                file_id = future.result().get("data", {}).get("file_id")
 
                 file_info["file_id"] = file_id
                 file_info["status"] = "UPLOADED"
@@ -594,9 +626,9 @@ def upload_files_to_intron(
                     f"Successfully uploaded {file_info['uuid']} -> file_id: {file_id}"
                 )
 
-            except Exception as error:
-                logger.error(f"Upload failed for {file_info['uuid']}: {error}")
-                file_info["error"] = str(error)
+            except Exception as exc:
+                logger.error(f"Upload failed for {file_info['uuid']}: {exc}")
+                file_info["error"] = str(exc)
                 upload_results.append(file_info)
 
     successful_uploads = sum(1 for r in upload_results if not r.get("error"))
@@ -638,20 +670,18 @@ def poll_transcription_results(
 
             try:
                 data = future.result().get("data", {})
-
-                file_info["status"] = data.get("processing_status")
-                file_info["transcript"] = data.get("audio_transcript")
+                file_info.update(data)
 
                 logger.info(f"Transcription complete for {file_info['uuid']}")
 
-            except Exception as error:
-                logger.error(f"Polling failed for {file_info['uuid']}: {error}")
-                file_info["error"] = str(error)
+            except Exception as exc:
+                logger.error(f"Polling failed for {file_info['uuid']}: {exc}")
+                file_info["error"] = str(exc)
 
             final_results.append(file_info)
 
     successful_transcriptions = sum(
-        1 for r in final_results if r.get("transcript") and not r.get("error")
+        1 for r in final_results if r.get("audio_transcript") and not r.get("error")
     )
     logger.info(
         f"Transcription complete: {successful_transcriptions}/{len(final_results)} succeeded"
@@ -672,30 +702,50 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  python3 rescue_script.py --url-list s3_urls.txt --date 2025-10-14 --api-key $INTRON_API_KEY
-  python3 rescue_script.py --url-list urls.csv --date test --dry-run
-  python3 rescue_script.py --url-list urls.xlsx --date 2025-10-14 --workers 8
+  # Using defaults (auto-detects recordings.txt/csv/xlsx, uses today's date)
+  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID
+
+  # Specifying custom file and date
+  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --url-list s3_urls.txt --date 2025-10-14
+
+  # Using auto-detected file with custom date
+  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --date 2025-10-14
+
+  # Dry run to preview files
+  python3 rescue_script.py --prompt-id YOUR_PROMPT_ID --dry-run
 
 Supported input formats:
   - TXT: One S3 URL per line
   - CSV: S3 URLs in first column
   - XLSX: S3 URLs in first column
 
+Auto-detection: If --url-list is not specified, the script will look for:
+  1. recordings.txt (first priority)
+  2. recordings.csv (second priority)
+  3. recordings.xlsx (third priority)
+
 Note: All files in the input list will be processed (no sampling).
 Call center analysis parameters are automatically enabled.
         """,
     )
 
-    # Required arguments
+    # Optional arguments (both now optional with smart defaults)
     parser.add_argument(
         "--url-list",
-        required=True,
-        help="Path to file containing audio file URLs (supports .txt, .csv, .xlsx)",
+        required=False,
+        help="Path to file containing audio file URLs (supports .txt, .csv, .xlsx). "
+        "If not specified, auto-detects recordings.txt/csv/xlsx",
     )
     parser.add_argument(
         "--date",
+        required=False,
+        help="Date string for output file naming (e.g., 2025-10-14). "
+        "If not specified, uses today's date (YYYY-MM-DD)",
+    )
+    parser.add_argument(
+        "--prompt-id",
         required=True,
-        help="Date string for output file naming (e.g., 2025-10-14)",
+        help="Prompt ID for Intron API processing (REQUIRED)",
     )
 
     # Optional arguments
@@ -750,9 +800,23 @@ def main() -> None:
             "ERROR: API key required. Provide via --api-key argument or INTRON_API_KEY environment variable"
         )
 
+    # Auto-detect url-list if not specified
+    url_list_path = args.url_list
+    if not url_list_path:
+        try:
+            url_list_path = auto_detect_recordings_file()
+        except FileNotFoundError as error:
+            raise SystemExit(f"ERROR: {error}")
+
+    # Use today's date if not specified
+    date_string = args.date
+    if not date_string:
+        date_string = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        logger.info(f"Using today's date: {date_string}")
+
     # Load all URLs from input file
     try:
-        all_urls = load_all_urls(args.url_list)
+        all_urls = load_all_urls(url_list_path)
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"ERROR: {error}")
 
@@ -775,7 +839,9 @@ def main() -> None:
     logger.info("=" * 70)
     logger.info("STEP 2: Uploading files to Intron Voice API")
     logger.info("=" * 70)
-    uploaded_files = upload_files_to_intron(downloaded_files, api_key, args.workers)
+    uploaded_files = upload_files_to_intron(
+        downloaded_files, api_key, args.prompt_id, args.workers
+    )
 
     # Step 3: Poll for transcription results
     logger.info("=" * 70)
@@ -788,7 +854,7 @@ def main() -> None:
     logger.info("STEP 4: Saving results to CSV")
     logger.info("=" * 70)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    output_csv_path = Path(f"results_{args.date}_{timestamp}.csv")
+    output_csv_path = Path(f"results_{date_string}_{timestamp}.csv")
     write_results_to_csv(output_csv_path, final_results)
 
     # Summary
@@ -798,7 +864,7 @@ def main() -> None:
     logger.info(f"Results saved to: {output_csv_path}")
     logger.info(f"Total files processed: {len(final_results)}")
     logger.info(
-        f"Successful transcriptions: {sum(1 for r in final_results if r.get('transcript'))}"
+        f"Successful transcriptions: {sum(1 for r in final_results if r.get('audio_transcript'))}"
     )
     logger.info(f"Failed operations: {sum(1 for r in final_results if r.get('error'))}")
 
