@@ -13,6 +13,12 @@ This script automates the complete workflow for transcribing and analyzing call 
 - ✓ Dynamic CSV output with ALL API fields (19+ columns)
 - ✓ Concurrent processing for optimal performance
 
+**Important links**
+
+```bash
+https://transcribe.intron.health/docs/?section=transcribe-with-api-file-upload
+https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html
+```
 ---
 
 ## Installation
