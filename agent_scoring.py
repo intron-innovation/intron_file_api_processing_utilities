@@ -1,20 +1,3 @@
-"""
-Intron Voice API Rescue Script - Call Center Audio Transcription
-
-This script automates the workflow of downloading call center audio files from AWS S3,
-uploading them to the Intron Voice API for transcription and analysis, and collecting
-comprehensive results into a CSV file.
-
-Features:
-- Supports multiple input formats: TXT, CSV, and XLSX files
-- Processes ALL audio files from input (no sampling)
-- Automatically applies call center analysis parameters
-- Flattens nested API responses into CSV columns
-- Includes: agent scoring, sentiment analysis, compliance checks, product insights, etc.
-
-Author: Intron Health Integration Team
-"""
-
 import argparse
 import csv
 import logging
@@ -38,6 +21,21 @@ from urllib3.util.retry import Retry
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ============================================================================
+# CONFIGURATION - Update these values with your credentials
+# ============================================================================
+
+# Intron API Configuration
+INTRON_API_KEY = "your-api-key-here"
+TEMPLATE_ID = "your-template-id-here"
+
+# AWS Configuration
+AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
+AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
+AWS_DEFAULT_REGION = "eu-west-2"
+
+# ============================================================================
+
+# ============================================================================
 # SECTION 1: CONSTANTS & CONFIGURATION
 # ============================================================================
 
@@ -55,7 +53,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("intron_rescue")
+logger = logging.getLogger("agent_scoring")
 
 
 # ============================================================================
@@ -126,7 +124,12 @@ def download_from_s3(uri: str, destination_path: Path) -> Path:
     bucket, key = parse_s3_uri(uri)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
 
-    s3_client = boto3.client("s3")
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        region_name=AWS_DEFAULT_REGION,
+    )
     s3_client.download_file(bucket, key, str(destination_path))
 
     return destination_path
@@ -479,46 +482,19 @@ def write_results_to_csv(output_path: Path, results: List[Dict[str, Any]]) -> No
 # ============================================================================
 
 
-def auto_detect_recordings_file() -> str:
+def load_urls(url_list_path: str, sample_size: int = None) -> List[str]:
     """
-    Auto-detect recordings file in the current directory.
-
-    Searches for files named 'recordings' with extensions in priority order:
-    1. recordings.txt
-    2. recordings.csv
-    3. recordings.xlsx
-
-    Returns:
-        Path to the first found recordings file
-
-    Raises:
-        FileNotFoundError: If no recordings file is found
-    """
-    file_priorities = ["recordings.txt", "recordings.csv", "recordings.xlsx"]
-
-    for filename in file_priorities:
-        file_path = Path(filename)
-        if file_path.exists():
-            logger.info(f"Auto-detected recordings file: {filename}")
-            return str(file_path)
-
-    raise FileNotFoundError(
-        "No recordings file found. Expected one of: recordings.txt, recordings.csv, or recordings.xlsx"
-    )
-
-
-def load_all_urls(url_list_path: str) -> List[str]:
-    """
-    Load all URLs from a file (supports TXT, CSV, XLSX formats).
+    Load URLs from a file with optional sampling (supports TXT, CSV, XLSX formats).
 
     For CSV and XLSX files, reads URLs from the first column.
     For TXT files, reads one URL per line.
 
     Args:
         url_list_path: Path to file containing URLs
+        sample_size: Number of URLs to process (None = process all)
 
     Returns:
-        List of all URLs found in the file
+        List of URLs (sampled if sample_size specified, otherwise all URLs)
 
     Raises:
         FileNotFoundError: If URL list file doesn't exist
@@ -568,7 +544,17 @@ def load_all_urls(url_list_path: str) -> List[str]:
     if not urls:
         raise ValueError(f"No URLs found in file: {url_list_path}")
 
-    logger.info(f"Loaded {len(urls)} URLs from {url_list_path}")
+    total_urls = len(urls)
+
+    # Apply sampling if specified
+    if sample_size is not None and sample_size > 0:
+        urls = urls[:sample_size]
+        logger.info(
+            f"Loaded {total_urls} URLs from {url_list_path}, processing first {len(urls)}"
+        )
+    else:
+        logger.info(f"Loaded {len(urls)} URLs from {url_list_path} (processing all)")
+
     return urls
 
 
@@ -699,60 +685,61 @@ def setup_argument_parser() -> argparse.ArgumentParser:
         Configured ArgumentParser instance
     """
     parser = argparse.ArgumentParser(
-        description="Intron Voice API Rescue Script - Call Center Audio Transcription",
+        description="Intron Voice API Agent Scoring Script - Call Center Audio Transcription",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  # Using defaults (auto-detects recordings.txt/csv/xlsx, uses today's date)
-  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID
+  # Process all files in the list
+  python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15
 
-  # Specifying custom file and date
-  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --url-list s3_urls.txt --date 2025-10-14
-
-  # Using auto-detected file with custom date
-  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --date 2025-10-14
+  # Process only the first 10 files (sampling)
+  python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15 --sample 10
+  python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15 -n 10
 
   # Dry run to preview files
-  python3 rescue_script.py --template-id YOUR_TEMPLATE_ID --dry-run
+  python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15 --dry-run
+
+  # With custom output directory and increased workers
+  python3 agent_scoring.py --url-list recordings.csv --date 2025-10-15 --out-dir results --workers 8
 
 Supported input formats:
   - TXT: One S3 URL per line
   - CSV: S3 URLs in first column
   - XLSX: S3 URLs in first column
 
-Auto-detection: If --url-list is not specified, the script will look for:
-  1. recordings.txt (first priority)
-  2. recordings.csv (second priority)
-  3. recordings.xlsx (third priority)
+Configuration:
+  - Update the constants at the top of the script with your credentials
+  - INTRON_API_KEY: Your Intron API key
+  - TEMPLATE_ID: Your template ID from Intron Health
+  - AWS credentials: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
 
-Note: All files in the input list will be processed (no sampling).
+Sampling:
+  - Use --sample or -n to process only the first N files
+  - Omit --sample to process all files in the input list
+
 Call center analysis parameters are automatically enabled.
         """,
     )
 
-    # Optional arguments (both now optional with smart defaults)
+    # Required arguments
     parser.add_argument(
         "--url-list",
-        required=False,
-        help="Path to file containing audio file URLs (supports .txt, .csv, .xlsx). "
-        "If not specified, auto-detects recordings.txt/csv/xlsx",
+        required=True,
+        help="Path to file containing audio file URLs (supports .txt, .csv, .xlsx)",
     )
     parser.add_argument(
         "--date",
-        required=False,
-        help="Date string for output file naming (e.g., 2025-10-14). "
-        "If not specified, uses today's date (YYYY-MM-DD)",
-    )
-    parser.add_argument(
-        "--template-id",
-        required=False,
-        help="Template ID for Intron API processing (can also use TEMPLATE_ID environment variable)",
+        required=True,
+        help="Date string for output file naming (e.g., 2025-10-15, format: YYYY-MM-DD)",
     )
 
     # Optional arguments
     parser.add_argument(
-        "--api-key",
-        help="Intron API key (can also use INTRON_API_KEY environment variable)",
+        "--sample",
+        "-n",
+        type=int,
+        default=None,
+        help="Number of files to process from the list (default: process all files)",
     )
     parser.add_argument(
         "--out-dir",
@@ -781,59 +768,89 @@ Call center analysis parameters are automatically enabled.
 
 def main() -> None:
     """
-    Main entry point for the Intron Voice API rescue script.
+    Main entry point for the Intron Voice API agent scoring script.
 
     This orchestrates the complete workflow:
     1. Parse command-line arguments
-    2. Load and sample URLs
-    3. Download audio files
-    4. Upload to Intron API
-    5. Poll for transcription results
-    6. Save results to CSV
+    2. Validate configuration constants
+    3. Load URLs with optional sampling
+    4. Download audio files
+    5. Upload to Intron API
+    6. Poll for transcription results
+    7. Save results to CSV
     """
+    global AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+
     parser = setup_argument_parser()
     args = parser.parse_args()
 
-    # Validate API key
-    api_key = args.api_key or os.getenv("INTRON_API_KEY")
+    # Validate configuration - check constants first, then environment variables
+    api_key = (
+        INTRON_API_KEY
+        if INTRON_API_KEY != "your-api-key-here"
+        else os.getenv("INTRON_API_KEY")
+    )
+    template_id = (
+        TEMPLATE_ID
+        if TEMPLATE_ID != "your-template-id-here"
+        else os.getenv("TEMPLATE_ID")
+    )
+    aws_key = (
+        AWS_ACCESS_KEY_ID
+        if AWS_ACCESS_KEY_ID != "your-aws-access-key-id"
+        else os.getenv("AWS_ACCESS_KEY_ID")
+    )
+    aws_secret = (
+        AWS_SECRET_ACCESS_KEY
+        if AWS_SECRET_ACCESS_KEY != "your-aws-secret-access-key"
+        else os.getenv("AWS_SECRET_ACCESS_KEY")
+    )
+    aws_region = os.getenv("AWS_DEFAULT_REGION", AWS_DEFAULT_REGION)
+
     if not api_key:
         raise SystemExit(
-            "ERROR: API key required. Provide via --api-key argument or INTRON_API_KEY environment variable"
+            "ERROR: API key not configured. Update INTRON_API_KEY constant in script or set INTRON_API_KEY environment variable."
         )
 
-    # Validate template ID
-    template_id = args.template_id or os.getenv("TEMPLATE_ID")
     if not template_id:
         raise SystemExit(
-            "ERROR: Template ID required. Provide via --template-id argument or TEMPLATE_ID environment variable"
+            "ERROR: Template ID not configured. Update TEMPLATE_ID constant in script or set TEMPLATE_ID environment variable."
         )
 
-    # Auto-detect url-list if not specified
+    if not aws_key:
+        raise SystemExit(
+            "ERROR: AWS credentials not configured. Update AWS_ACCESS_KEY_ID constant in script or set environment variable."
+        )
+
+    if not aws_secret:
+        raise SystemExit(
+            "ERROR: AWS credentials not configured. Update AWS_SECRET_ACCESS_KEY constant in script or set environment variable."
+        )
+
+    # Update global AWS constants for use in download_from_s3
+    AWS_ACCESS_KEY_ID = aws_key
+    AWS_SECRET_ACCESS_KEY = aws_secret
+    AWS_DEFAULT_REGION = aws_region
+
+    # Get required arguments
     url_list_path = args.url_list
-    if not url_list_path:
-        try:
-            url_list_path = auto_detect_recordings_file()
-        except FileNotFoundError as error:
-            raise SystemExit(f"ERROR: {error}")
-
-    # Use today's date if not specified
     date_string = args.date
-    if not date_string:
-        date_string = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        logger.info(f"Using today's date: {date_string}")
+    sample_size = args.sample
 
-    # Load all URLs from input file
+    # Load URLs from input file with optional sampling
     try:
-        all_urls = load_all_urls(url_list_path)
+        urls = load_urls(url_list_path, sample_size)
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"ERROR: {error}")
 
     # Dry run mode - preview URLs and exit
     if args.dry_run:
-        logger.info("DRY RUN MODE - Previewing URLs to be processed:")
-        for idx, url in enumerate(all_urls, 1):
+        logger.info("=" * 70)
+        logger.info("DRY RUN MODE - Previewing URLs to be processed")
+        logger.info("=" * 70)
+        for idx, url in enumerate(urls, 1):
             print(f"  {idx}. {url}")
-        logger.info(f"Total: {len(all_urls)} URLs will be processed")
+        logger.info(f"Total: {len(urls)} URLs will be processed")
         return
 
     # Clean and recreate downloads folder
@@ -848,7 +865,7 @@ def main() -> None:
     logger.info("=" * 70)
     logger.info("STEP 1: Downloading audio files")
     logger.info("=" * 70)
-    downloaded_files = download_files(all_urls, output_directory, args.workers)
+    downloaded_files = download_files(urls, output_directory, args.workers)
 
     # Step 2: Upload to Intron API
     logger.info("=" * 70)
