@@ -2,12 +2,17 @@
 
 Automates call center audio transcription using Intron Voice API. Downloads audio from AWS S3, processes with AI-powered analysis, and outputs agent performance scores, sentiment, compliance, and insights to CSV.
 
+**Important Links**
+
+- [Intron API Documentation](https://transcribe.intron.health/docs/?section=transcribe-with-api-file-upload)
+- [Conda Installation Guide](https://docs.conda.io/projects/conda/en/stable/user-guide/install/index.html)
+
 ---
 
 ## Installation
 
 ```bash
-conda create -n agent_scoring python=3.12
+conda create -n agent_scoring python=3.12 -y
 conda activate agent_scoring
 pip install -r requirements.txt
 ```
