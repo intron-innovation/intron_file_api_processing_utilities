@@ -1,2 +1,1 @@
-s3://support-file-uploads/support-calls.wav
-s3://support-file-uploads/support-calls.mp3
+s3://audio-file-upload-tests/realcl.wav,realVoice

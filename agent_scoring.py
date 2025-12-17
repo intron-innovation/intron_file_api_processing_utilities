@@ -184,13 +184,13 @@ def _download_worker(
 
 
 def download_files(
-    urls: List[str], output_directory: Path, max_workers: int = 4
+    url_entries: List[Tuple[str, str | None]], output_directory: Path, max_workers: int = 4
 ) -> List[Dict[str, Any]]:
     """
     Download multiple files concurrently from S3 or HTTP sources.
 
     Args:
-        urls: List of file URLs (S3 URIs or HTTP URLs)
+        url_entries: List of tuples (url, audio_file_name) where audio_file_name may be None
         output_directory: Directory where files will be saved
         max_workers: Maximum number of concurrent downloads
 
@@ -199,6 +199,7 @@ def download_files(
             - uuid: Unique identifier assigned to the file
             - original_url: Source URL
             - local_path: Path where file was saved
+            - audio_file_name: Custom audio file name (or None to use default)
             - error: Error message if download failed, None otherwise
     """
     session = create_requests_session()
@@ -207,21 +208,22 @@ def download_files(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_metadata = {}
 
-        for url in urls:
+        for url, audio_file_name in url_entries:
             file_uuid = str(uuid.uuid4())
             filename = Path(url.split("/")[-1].split("?")[0] or file_uuid)
             destination_path = output_directory / f"{file_uuid}_{filename}"
 
             future = executor.submit(_download_worker, url, destination_path, session)
-            future_to_metadata[future] = (url, destination_path, file_uuid)
+            future_to_metadata[future] = (url, destination_path, file_uuid, audio_file_name)
 
         for future in as_completed(future_to_metadata):
-            url, destination_path, file_uuid = future_to_metadata[future]
+            url, destination_path, file_uuid, audio_file_name = future_to_metadata[future]
 
             result_entry = {
                 "uuid": file_uuid,
                 "original_url": url,
                 "local_path": str(destination_path),
+                "audio_file_name": audio_file_name,
                 "error": None,
             }
 
@@ -242,20 +244,23 @@ def download_files(
 # ============================================================================
 
 
-def build_upload_payload(file_path: str, template_id: str) -> Dict[str, str]:
+def build_upload_payload(
+    file_path: str, template_id: str, audio_file_name: str | None = None
+) -> Dict[str, str]:
     """
     Build the payload for Intron API upload request with call center parameters.
 
     Args:
         file_path: Path to the file being uploaded
         template_id: Template ID for Intron API processing
+        audio_file_name: Custom audio file name for the API (uses basename if None)
 
     Returns:
         Dictionary containing payload fields for the API request with all
         call center analysis parameters enabled
     """
     payload = {
-        "audio_file_name": os.path.basename(file_path),
+        "audio_file_name": audio_file_name or os.path.basename(file_path),
         "use_category": "file_category_call_center",
         "use_template_id": template_id,
         "get_summary": "TRUE",
@@ -482,19 +487,20 @@ def write_results_to_csv(output_path: Path, results: List[Dict[str, Any]]) -> No
 # ============================================================================
 
 
-def load_urls(url_list_path: str, sample_size: int = None) -> List[str]:
+def load_urls(url_list_path: str, sample_size: int = None) -> List[Tuple[str, str | None]]:
     """
     Load URLs from a file with optional sampling (supports TXT, CSV, XLSX formats).
 
-    For CSV and XLSX files, reads URLs from the first column.
-    For TXT files, reads one URL per line.
+    For CSV and XLSX files, reads URLs from the first column and optional
+    audio_file_name from the second column.
+    For TXT files, reads one URL per line, optionally with comma-separated audio_file_name.
 
     Args:
         url_list_path: Path to file containing URLs
         sample_size: Number of URLs to process (None = process all)
 
     Returns:
-        List of URLs (sampled if sample_size specified, otherwise all URLs)
+        List of tuples (url, audio_file_name) where audio_file_name may be None
 
     Raises:
         FileNotFoundError: If URL list file doesn't exist
@@ -506,32 +512,60 @@ def load_urls(url_list_path: str, sample_size: int = None) -> List[str]:
         raise FileNotFoundError(f"URL list file not found: {url_list_path}")
 
     file_extension = file_path.suffix.lower()
-    urls = []
+    url_entries: List[Tuple[str, str | None]] = []
 
     if file_extension == ".txt":
-        # Read text file line by line
+        # Read text file line by line, support comma-separated audio_file_name
         with open(url_list_path, "r") as file:
-            urls = [line.strip() for line in file if line.strip()]
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                # Support format: url,audio_file_name or just url
+                if "," in line:
+                    parts = line.split(",", 1)
+                    url = parts[0].strip()
+                    audio_file_name = parts[1].strip() if len(parts) > 1 else None
+                else:
+                    url = line
+                    audio_file_name = None
+                url_entries.append((url, audio_file_name))
 
     elif file_extension == ".csv":
-        # Read CSV file, extract first column
+        # Read CSV file, extract first column (url) and optional second column (audio_file_name)
         try:
             df = pd.read_csv(url_list_path)
             if df.empty:
                 raise ValueError(f"CSV file is empty: {url_list_path}")
-            # Get first column values and convert to list
-            urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+            for _, row in df.iterrows():
+                url = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else None
+                if not url:
+                    continue
+                audio_file_name = (
+                    str(row.iloc[1]).strip()
+                    if len(row) > 1 and pd.notna(row.iloc[1])
+                    else None
+                )
+                url_entries.append((url, audio_file_name))
         except Exception as exc:
             raise ValueError(f"Failed to read CSV file {url_list_path}: {exc}")
 
     elif file_extension in [".xlsx", ".xls"]:
-        # Read Excel file, extract first column from first sheet
+        # Read Excel file, extract first column (url) and optional second column (audio_file_name)
         try:
             df = pd.read_excel(url_list_path, engine="openpyxl")
             if df.empty:
                 raise ValueError(f"Excel file is empty: {url_list_path}")
-            # Get first column values and convert to list
-            urls = df.iloc[:, 0].dropna().astype(str).str.strip().tolist()
+            for _, row in df.iterrows():
+                url = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else None
+                if not url:
+                    continue
+                audio_file_name = (
+                    str(row.iloc[1]).strip()
+                    if len(row) > 1 and pd.notna(row.iloc[1])
+                    else None
+                )
+                url_entries.append((url, audio_file_name))
         except Exception as exc:
             raise ValueError(f"Failed to read Excel file {url_list_path}: {exc}")
 
@@ -541,21 +575,21 @@ def load_urls(url_list_path: str, sample_size: int = None) -> List[str]:
             f"Supported formats: .txt, .csv, .xlsx, .xls"
         )
 
-    if not urls:
+    if not url_entries:
         raise ValueError(f"No URLs found in file: {url_list_path}")
 
-    total_urls = len(urls)
+    total_urls = len(url_entries)
 
     # Apply sampling if specified
     if sample_size is not None and sample_size > 0:
-        urls = urls[:sample_size]
+        url_entries = url_entries[:sample_size]
         logger.info(
-            f"Loaded {total_urls} URLs from {url_list_path}, processing first {len(urls)}"
+            f"Loaded {total_urls} URLs from {url_list_path}, processing first {len(url_entries)}"
         )
     else:
-        logger.info(f"Loaded {len(urls)} URLs from {url_list_path} (processing all)")
+        logger.info(f"Loaded {len(url_entries)} URLs from {url_list_path} (processing all)")
 
-    return urls
+    return url_entries
 
 
 def upload_files_to_intron(
@@ -589,7 +623,11 @@ def upload_files_to_intron(
                 )
                 continue
 
-            payload = build_upload_payload(file_info["local_path"], template_id)
+            payload = build_upload_payload(
+                file_info["local_path"],
+                template_id,
+                file_info.get("audio_file_name"),
+            )
             future = executor.submit(
                 upload_to_intron,
                 file_info["local_path"],
@@ -703,9 +741,10 @@ Example usage:
   python3 agent_scoring.py --url-list recordings.csv --date 2025-10-15 --out-dir results --workers 8
 
 Supported input formats:
-  - TXT: One S3 URL per line
-  - CSV: S3 URLs in first column
-  - XLSX: S3 URLs in first column
+  - TXT: One S3 URL per line, optionally with comma-separated audio_file_name
+         Example: s3://bucket/file.wav,my_custom_name
+  - CSV: S3 URLs in first column, optional audio_file_name in second column
+  - XLSX: S3 URLs in first column, optional audio_file_name in second column
 
 Configuration:
   - Update the constants at the top of the script with your credentials
@@ -839,7 +878,7 @@ def main() -> None:
 
     # Load URLs from input file with optional sampling
     try:
-        urls = load_urls(url_list_path, sample_size)
+        url_entries = load_urls(url_list_path, sample_size)
     except (FileNotFoundError, ValueError) as error:
         raise SystemExit(f"ERROR: {error}")
 
@@ -848,9 +887,12 @@ def main() -> None:
         logger.info("=" * 70)
         logger.info("DRY RUN MODE - Previewing URLs to be processed")
         logger.info("=" * 70)
-        for idx, url in enumerate(urls, 1):
-            print(f"  {idx}. {url}")
-        logger.info(f"Total: {len(urls)} URLs will be processed")
+        for idx, (url, audio_file_name) in enumerate(url_entries, 1):
+            if audio_file_name:
+                print(f"  {idx}. {url} -> audio_file_name: {audio_file_name}")
+            else:
+                print(f"  {idx}. {url}")
+        logger.info(f"Total: {len(url_entries)} URLs will be processed")
         return
 
     # Clean and recreate downloads folder
@@ -865,7 +907,7 @@ def main() -> None:
     logger.info("=" * 70)
     logger.info("STEP 1: Downloading audio files")
     logger.info("=" * 70)
-    downloaded_files = download_files(urls, output_directory, args.workers)
+    downloaded_files = download_files(url_entries, output_directory, args.workers)
 
     # Step 2: Upload to Intron API
     logger.info("=" * 70)

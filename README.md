@@ -38,7 +38,7 @@ AWS_DEFAULT_REGION = "eu-west-2"
 conda activate agent_scoring
 
 # Process all files
-python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15
+python3 agent_scoring.py --url-list recordings.txt --date 2025-17-15
 
 # Process first 10 files (sampling)
 python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15 --sample 10
@@ -112,20 +112,30 @@ python3 agent_scoring.py --url-list recordings.txt --date 2025-10-15
 
 ## Input File Format
 
-Edit `recordings.txt` with your S3 URLs (one per line):
+Edit `recordings.txt` with your S3 URLs (one per line), optionally with a custom `audio_file_name`:
 
 ```text
 s3://support-file-uploads/support-calls.wav
-s3://support-file-uploads/support-calls.mp3
+s3://support-file-uploads/support-calls.mp3,my_custom_name
+```
+
+**With custom audio_file_name (CSV format):**
+
+```csv
+url,audio_file_name
+s3://support-file-uploads/call1.wav,customer_call_001
+s3://support-file-uploads/call2.wav,customer_call_002
 ```
 
 **Supported formats:**
-- TXT: One URL per line
-- CSV/XLSX: URLs in first column
+- TXT: One URL per line, optionally comma-separated with `audio_file_name`
+- CSV/XLSX: URLs in first column, optional `audio_file_name` in second column
 
 **Supported URLs:**
 - S3: `s3://bucket/path/file.wav`
 - HTTP/HTTPS: Any accessible URL
+
+**Note:** The `audio_file_name` is optional. If not provided, the file's basename is used.
 
 ---
 
