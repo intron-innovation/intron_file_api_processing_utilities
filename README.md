@@ -119,17 +119,17 @@ s3://support-file-uploads/support-calls.wav
 s3://support-file-uploads/support-calls.mp3,my_custom_name
 ```
 
-**With custom audio_file_name (CSV format):**
+**With custom audio_file_name (CSV/XLSX format):**
 
-```csv
-url,audio_file_name
-s3://support-file-uploads/call1.wav,customer_call_001
-s3://support-file-uploads/call2.wav,customer_call_002
-```
+| url | audio_file_name |
+|-----|-----------------|
+| s3://support-file-uploads/call1.wav | customer_call_001 |
+| s3://support-file-uploads/call2.wav | customer_call_002 |
 
 **Supported formats:**
 - TXT: One URL per line, optionally comma-separated with `audio_file_name`
-- CSV/XLSX: URLs in first column, optional `audio_file_name` in second column
+- CSV: URLs in first column, optional `audio_file_name` in second column
+- XLSX/XLS: URLs in first column, optional `audio_file_name` in second column
 
 **Supported URLs:**
 - S3: `s3://bucket/path/file.wav`
